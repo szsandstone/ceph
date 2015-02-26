@@ -470,6 +470,7 @@ public:
   friend class Locker;
   friend class Migrator;
   friend class MDCache;
+  friend class StrayManager;
   friend class CDir;
   friend class CInodeExport;
 
@@ -520,6 +521,9 @@ public:
   // -- accessors --
   bool is_root() const { return inode.ino == MDS_INO_ROOT; }
   bool is_stray() const { return MDS_INO_IS_STRAY(inode.ino); }
+  mds_rank_t get_stray_owner() const {
+    return (mds_rank_t)MDS_INO_STRAY_OWNER(inode.ino);
+  }
   bool is_mdsdir() const { return MDS_INO_IS_MDSDIR(inode.ino); }
   bool is_base() const { return is_root() || is_mdsdir(); }
   bool is_system() const { return inode.ino < MDS_INO_SYSTEM_BASE; }
