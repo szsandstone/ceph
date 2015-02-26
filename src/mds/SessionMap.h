@@ -154,12 +154,12 @@ public:
   int get_state() { return state; }
   const char *get_state_name() { return get_state_name(state); }
   uint64_t get_state_seq() { return state_seq; }
-  bool is_closed() { return state == STATE_CLOSED; }
-  bool is_opening() { return state == STATE_OPENING; }
-  bool is_open() { return state == STATE_OPEN; }
-  bool is_closing() { return state == STATE_CLOSING; }
-  bool is_stale() { return state == STATE_STALE; }
-  bool is_killing() { return state == STATE_KILLING; }
+  bool is_closed() const { return state == STATE_CLOSED; }
+  bool is_opening() const { return state == STATE_OPENING; }
+  bool is_open() const { return state == STATE_OPEN; }
+  bool is_closing() const { return state == STATE_CLOSING; }
+  bool is_stale() const { return state == STATE_STALE; }
+  bool is_killing() const { return state == STATE_KILLING; }
 
   void inc_importing() {
     ++importing_count;
@@ -253,7 +253,6 @@ public:
     last_cap_renew = utime_t();
 
   }
-
 };
 
 /*
@@ -267,13 +266,18 @@ class MDS;
  * encode/decode outside of live MDS instance.
  */
 class SessionMapStore {
+protected:
+  version_t version;
 public:
   ceph::unordered_map<entity_name_t, Session*> session_map;
-  version_t version;
   mds_rank_t rank;
 
-  virtual void encode(bufferlist& bl) const;
-  virtual void decode(bufferlist::iterator& blp);
+  version_t get_version() const {return version;}
+
+  virtual void encode_header(bufferlist *header_bl);
+  virtual void decode_header(bufferlist &header_bl);
+  virtual void decode_values(std::map<std::string, bufferlist> &session_vals);
+  virtual void decode_legacy(bufferlist::iterator& blp);
   void dump(Formatter *f) const;
 
   void set_rank(mds_rank_t r)
@@ -309,18 +313,68 @@ class SessionMap : public SessionMapStore {
 public:
   MDS *mds;
 
-public:  // i am lazy
+protected:
   version_t projected, committing, committed;
+public:
   map<int,xlist<Session*>* > by_state;
   uint64_t set_state(Session *session, int state);
   map<version_t, list<MDSInternalContextBase*> > commit_waiters;
 
   SessionMap(MDS *m) : mds(m),
-		       projected(0), committing(0), committed(0) 
+		       projected(0), committing(0), committed(0),
+                       loaded_legacy(false)
   { }
 
+  /**
+   * Start a new version: subsequent calls to mark_dirty will associate
+   * session updates with this version until inc_version is called again.
+   */
+  void inc_version();
+  
+  /**
+   * Used during journal replay, where we want to simultaneously consume
+   * a version from the projected and saved series.
+   */
+  void inc_version_and_project()
+  {
+    inc_version();
+    projected = version;
+  }
+
+  void set_version(const version_t v)
+  {
+    version = projected = v;
+  }
+
+  void set_projected(const version_t v)
+  {
+    projected = v;
+  }
+
+  version_t get_projected() const
+  {
+    return projected;
+  }
+
+  version_t inc_projected()
+  {
+    return ++projected;
+  }
+
+  version_t get_committed()
+  {
+    return committed;
+  }
+
+  version_t get_committing()
+  {
+    return committed;
+  }
+
+  int get_sessions_per_version() const;
+
   // sessions
-  void decode(bufferlist::iterator& blp);
+  void decode_legacy(bufferlist::iterator& blp);
   bool empty() { return session_map.empty(); }
   const ceph::unordered_map<entity_name_t, Session*> &get_sessions() const
   {
@@ -428,10 +482,26 @@ public:  // i am lazy
   object_t get_object_name();
 
   void load(MDSInternalContextBase *onload);
-  void _load_finish(int r, bufferlist &bl);
+  void _load_finish(
+      int operation_r,
+      int header_r,
+      int values_r,
+      bool first,
+      bufferlist &header_bl,
+      std::map<std::string, bufferlist> &session_vals);
+
+  void load_legacy();
+  void _load_legacy_finish(int r, bufferlist &bl);
+
   void save(MDSInternalContextBase *onsave, version_t needv=0);
   void _save_finish(version_t v);
- 
+
+protected:
+  std::set<entity_name_t> dirty_sessions;
+  std::set<entity_name_t> null_sessions;
+  bool loaded_legacy;
+public:
+  void mark_dirty(const Session *session);
 };
 
 
