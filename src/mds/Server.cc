@@ -265,9 +265,9 @@ void Server::handle_client_session(MClientSession *m)
     if (session->is_closed())
       mds->sessionmap.add_session(session);
 
+    pv = mds->sessionmap.mark_projected(session);
     sseq = mds->sessionmap.set_state(session, Session::STATE_OPENING);
     mds->sessionmap.touch_session(session);
-    pv = mds->sessionmap.inc_projected();
     mdlog->start_submit_entry(new ESession(m->get_source_inst(), true, pv, m->client_meta),
 			      new C_MDS_session_finish(mds, session, sseq, true, pv));
     mdlog->flush();
@@ -357,7 +357,7 @@ void Server::_session_logged(Session *session, uint64_t state_seq, bool open, ve
   dout(10) << "_session_logged " << session->info.inst << " state_seq " << state_seq << " " << (open ? "open":"close")
 	   << " " << pv << dendl;
 
-  mds->sessionmap.inc_version();
+  mds->sessionmap.mark_dirty(session);
 
   if (piv) {
     mds->inotable->apply_release_ids(inos);
@@ -372,7 +372,6 @@ void Server::_session_logged(Session *session, uint64_t state_seq, bool open, ve
   } else if (open) {
     assert(session->is_opening());
     mds->sessionmap.set_state(session, Session::STATE_OPEN);
-    mds->sessionmap.mark_dirty(session);
     mds->sessionmap.touch_session(session);
     assert(session->connection != NULL);
     session->connection->send_message(new MClientSession(CEPH_SESSION_OPEN));
@@ -447,20 +446,15 @@ void Server::_session_logged(Session *session, uint64_t state_seq, bool open, ve
 version_t Server::prepare_force_open_sessions(map<client_t,entity_inst_t>& cm,
 					      map<client_t,uint64_t>& sseqmap)
 {
-  version_t pv = mds->sessionmap.inc_projected();
+  version_t pv = mds->sessionmap.get_projected();
+
   dout(10) << "prepare_force_open_sessions " << pv 
 	   << " on " << cm.size() << " clients"
 	   << dendl;
-  int sessions_inserted = 0;
   for (map<client_t,entity_inst_t>::iterator p = cm.begin(); p != cm.end(); ++p) {
-    if (sessions_inserted >= mds->sessionmap.get_sessions_per_version()) {
-      // Split into multiple versions to ensure SessionMap doesn't have
-      // to do huge writes.
-      pv = mds->sessionmap.inc_projected();
-    }
-    sessions_inserted++;
 
     Session *session = mds->sessionmap.get_or_add_session(p->second);
+    pv = mds->sessionmap.mark_projected(session);
     if (session->is_closed() || 
 	session->is_closing() ||
 	session->is_killing())
@@ -470,7 +464,6 @@ version_t Server::prepare_force_open_sessions(map<client_t,entity_inst_t>& cm,
 	     session->is_opening() ||
 	     session->is_stale());
     session->inc_importing();
-//  mds->sessionmap.touch_session(session);
   }
   return pv;
 }
@@ -487,15 +480,9 @@ void Server::finish_force_open_sessions(map<client_t,entity_inst_t>& cm,
   dout(10) << "finish_force_open_sessions on " << cm.size() << " clients,"
 	   << " initial v " << mds->sessionmap.get_version() << dendl;
   
-  mds->sessionmap.inc_version();
 
   int sessions_inserted = 0;
   for (map<client_t,entity_inst_t>::iterator p = cm.begin(); p != cm.end(); ++p) {
-    if (sessions_inserted >= mds->sessionmap.get_sessions_per_version()) {
-      // Identical logic to prepare_force_open_sessions so that
-      // projected versions will match actual versions
-      mds->sessionmap.inc_version();
-    }
     sessions_inserted++;
 
     Session *session = mds->sessionmap.get_session(p->second.name);
@@ -512,16 +499,17 @@ void Server::finish_force_open_sessions(map<client_t,entity_inst_t>& cm,
 	mds->send_message_client(new MClientSession(CEPH_SESSION_OPEN), session);
 	if (mdcache->is_readonly())
 	  mds->send_message_client(new MClientSession(CEPH_SESSION_FORCE_RO), session);
-        mds->sessionmap.mark_dirty(session);
       }
     } else {
       dout(10) << "force_open_sessions skipping already-open " << session->info.inst << dendl;
       assert(session->is_open() || session->is_stale());
     }
+
     if (dec_import) {
       session->dec_importing();
-      mds->sessionmap.mark_dirty(session);
     }
+
+    mds->sessionmap.mark_dirty(session);
   }
 
   dout(10) << __func__ << ": final v " << mds->sessionmap.get_version() << dendl;
@@ -646,7 +634,7 @@ void Server::kill_session(Session *session, Context *on_safe)
 void Server::journal_close_session(Session *session, int state, Context *on_safe)
 {
   uint64_t sseq = mds->sessionmap.set_state(session, state);
-  version_t pv = mds->sessionmap.inc_projected();
+  version_t pv = mds->sessionmap.mark_projected(session);
   version_t piv = 0;
 
   // release alloc and pending-alloc inos for this session
@@ -2187,7 +2175,8 @@ CInode* Server::prepare_new_inode(MDRequestRef& mdr, CDir *dir, inodeno_t useino
   if (mdr->session->info.prealloc_inos.size()) {
     mdr->used_prealloc_ino = 
       in->inode.ino = mdr->session->take_ino(useino);  // prealloc -> used
-    mds->sessionmap.inc_projected();
+    mds->sessionmap.mark_projected(mdr->session);
+
     dout(10) << "prepare_new_inode used_prealloc " << mdr->used_prealloc_ino
 	     << " (" << mdr->session->info.prealloc_inos
 	     << ", " << mdr->session->info.prealloc_inos.size() << " left)"
@@ -2211,7 +2200,7 @@ CInode* Server::prepare_new_inode(MDRequestRef& mdr, CDir *dir, inodeno_t useino
     mds->inotable->project_alloc_ids(mdr->prealloc_inos, got);
     assert(mdr->prealloc_inos.size());  // or else fix projected increment semantics
     mdr->session->pending_prealloc_inos.insert(mdr->prealloc_inos);
-    mds->sessionmap.inc_projected();
+    mds->sessionmap.mark_projected(mdr->session);
     dout(10) << "prepare_new_inode prealloc " << mdr->prealloc_inos << dendl;
   }
 
@@ -2301,14 +2290,12 @@ void Server::apply_allocated_inos(MDRequestRef& mdr)
     assert(session);
     session->pending_prealloc_inos.subtract(mdr->prealloc_inos);
     session->info.prealloc_inos.insert(mdr->prealloc_inos);
-    mds->sessionmap.inc_version();
     mds->sessionmap.mark_dirty(session);
     mds->inotable->apply_alloc_ids(mdr->prealloc_inos);
   }
   if (mdr->used_prealloc_ino) {
     assert(session);
     session->info.used_inos.erase(mdr->used_prealloc_ino);
-    mds->sessionmap.inc_version();
     mds->sessionmap.mark_dirty(session);
   }
 }

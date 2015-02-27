@@ -661,35 +661,29 @@ void Session::decode(bufferlist::iterator &p)
 /**
  * Mark a session as requiring write by the current value of `version`.
  */
-void SessionMap::mark_dirty(const Session *s)
+void SessionMap::mark_dirty(Session *s)
 {
-  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name << dendl;
-  dirty_sessions.insert(s->info.inst.name);
-}
+  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name
+    << " v=" << version << dendl;
 
-void SessionMap::inc_version()
-{
-  dout(20) << __func__ << " v " << version << " -> " << version + 1
-    << " dirty=" << dirty_sessions.size() << "/"
-    << g_conf->mds_sessionmap_keys_per_op / 2 << dendl;
-
-  if (dirty_sessions.size() >= g_conf->mds_sessionmap_keys_per_op / 2) {
-    // If there are >= allowance/2 sessions dirty, then we have to
-    // do a save now, because otherwise the sessions written in this
-    // newly incremented version could leave us with more than `allowance`
-    // dirty sessions, and thereby an oversized write in the next save()
+  if (dirty_sessions.size() >= g_conf->mds_sessionmap_keys_per_op) {
+    // Pre-empt the usual save() call from journal segment trim, in
+    // order to avoid building up an oversized OMAP update operation
+    // from too many sessions modified at once
     save(new C_MDSInternalNoop, version);
   }
+
   version++;
+  dirty_sessions.insert(s->info.inst.name);
+  s->pop_pv(version);
 }
 
-/**
- * Users of the sessionmap may not modify more than this many
- * sessions in a single version.  To modify more sessions, just
- * call inc_version again.
- */
-int SessionMap::get_sessions_per_version() const
+version_t SessionMap::mark_projected(Session *s)
 {
-  return g_conf->mds_sessionmap_keys_per_op / 2;
+  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name
+    << " pv=" << projected << " -> " << projected + 1 << dendl;
+  ++projected;
+  s->push_pv(projected);
+  return projected;
 }
 

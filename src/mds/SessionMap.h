@@ -86,7 +86,26 @@ private:
   void _update_human_name();
   std::string human_name;
 
+  // Versions in this this session was projected: used to verify
+  // that appropriate mark_dirty calls follow.
+  std::deque<version_t> projected;
+
 public:
+
+  void push_pv(version_t pv)
+  {
+    if (!projected.empty()) {
+      assert(projected.back() != pv);
+    }
+    projected.push_back(pv);
+  }
+
+  void pop_pv(version_t v)
+  {
+    assert(!projected.empty());
+    assert(projected.front() == v);
+    projected.pop_front();
+  }
 
   inline int get_state() const {return state;}
   void set_state(int new_state)
@@ -326,19 +345,12 @@ public:
   { }
 
   /**
-   * Start a new version: subsequent calls to mark_dirty will associate
-   * session updates with this version until inc_version is called again.
-   */
-  void inc_version();
-  
-  /**
    * Used during journal replay, where we want to simultaneously consume
    * a version from the projected and saved series.
    */
   void inc_version_and_project()
   {
-    inc_version();
-    projected = version;
+    projected = ++version;
   }
 
   void set_version(const version_t v)
@@ -356,22 +368,15 @@ public:
     return projected;
   }
 
-  version_t inc_projected()
-  {
-    return ++projected;
-  }
-
-  version_t get_committed()
+  version_t get_committed() const
   {
     return committed;
   }
 
-  version_t get_committing()
+  version_t get_committing() const
   {
     return committed;
   }
-
-  int get_sessions_per_version() const;
 
   // sessions
   void decode_legacy(bufferlist::iterator& blp);
@@ -501,7 +506,28 @@ protected:
   std::set<entity_name_t> null_sessions;
   bool loaded_legacy;
 public:
-  void mark_dirty(const Session *session);
+
+  /**
+   * Advance the version, and mark this session
+   * as dirty within the new version.
+   *
+   * Dirty means journalled but needing writeback
+   * to the backing store.  Must have called
+   * mark_projected previously for this session.
+   */
+  void mark_dirty(Session *session);
+
+  /**
+   * Advance the projected version, and mark this
+   * session as projected within the new version
+   *
+   * Projected means the session is updated in memory
+   * but we're waiting for the journal write of the update
+   * to finish.  Must subsequently call mark_dirty
+   * for sessions in the same global order as calls
+   * to mark_projected.
+   */
+  version_t mark_projected(Session *session);
 };
 
 
