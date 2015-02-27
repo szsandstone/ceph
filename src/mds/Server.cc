@@ -848,17 +848,15 @@ void Server::recover_filelocks(CInode *in, bufferlist locks, int64_t client)
   for (int i = 0; i < numlocks; ++i) {
     ::decode(lock, p);
     lock.client = client;
-    in->fcntl_locks.held_locks.insert(pair<uint64_t, ceph_filelock>
-				      (lock.start, lock));
-    ++in->fcntl_locks.client_held_lock_counts[client];
+    in->get_fcntl_lock_state()->held_locks.insert(pair<uint64_t, ceph_filelock>(lock.start, lock));
+    ++in->get_fcntl_lock_state()->client_held_lock_counts[client];
   }
   ::decode(numlocks, p);
   for (int i = 0; i < numlocks; ++i) {
     ::decode(lock, p);
     lock.client = client;
-    in->flock_locks.held_locks.insert(pair<uint64_t, ceph_filelock>
-				      (lock.start, lock));
-    ++in->flock_locks.client_held_lock_counts[client];
+    in->get_flock_lock_state()->held_locks.insert(pair<uint64_t, ceph_filelock> (lock.start, lock));
+    ++in->get_flock_lock_state()->client_held_lock_counts[client];
   }
 }
 
@@ -2269,7 +2267,7 @@ CInode* Server::prepare_new_inode(MDRequestRef& mdr, CDir *dir, inodeno_t useino
 
   if (!mds->mdsmap->get_inline_data_enabled() ||
       !mdr->session->connection->has_feature(CEPH_FEATURE_MDS_INLINE_DATA))
-    in->inode.inline_version = CEPH_INLINE_NONE;
+    in->inode.inline_data.version = CEPH_INLINE_NONE;
 
   mdcache->add_inode(in);  // add
   dout(10) << "prepare_new_inode " << *in << dendl;
@@ -2807,7 +2805,7 @@ void Server::handle_client_open(MDRequestRef& mdr)
     return;
   }
 
-  if (cur->inode.inline_version != CEPH_INLINE_NONE &&
+  if (cur->inode.inline_data.version != CEPH_INLINE_NONE &&
       !mdr->session->connection->has_feature(CEPH_FEATURE_MDS_INLINE_DATA)) {
     dout(7) << "old client cannot open inline data file " << *cur << dendl;
     respond_to_request(mdr, -EPERM);
@@ -3397,14 +3395,14 @@ void Server::handle_client_file_setlock(MDRequestRef& mdr)
     interrupt = true;
     // fall-thru
   case CEPH_LOCK_FLOCK:
-    lock_state = &cur->flock_locks;
+    lock_state = cur->get_flock_lock_state();
     break;
 
   case CEPH_LOCK_FCNTL_INTR:
     interrupt = true;
     // fall-thru
   case CEPH_LOCK_FCNTL:
-    lock_state = &cur->fcntl_locks;
+    lock_state = cur->get_fcntl_lock_state();
     break;
 
   default:
@@ -3487,11 +3485,11 @@ void Server::handle_client_file_readlock(MDRequestRef& mdr)
   ceph_lock_state_t *lock_state = NULL;
   switch (req->head.args.filelock_change.rule) {
   case CEPH_LOCK_FLOCK:
-    lock_state = &cur->flock_locks;
+    lock_state = cur->get_flock_lock_state();
     break;
 
   case CEPH_LOCK_FCNTL:
-    lock_state = &cur->fcntl_locks;
+    lock_state = cur->get_fcntl_lock_state();
     break;
 
   default:
