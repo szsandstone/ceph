@@ -86,7 +86,26 @@ private:
   void _update_human_name();
   std::string human_name;
 
+  // Versions in this this session was projected: used to verify
+  // that appropriate mark_dirty calls follow.
+  std::deque<version_t> projected;
+
 public:
+
+  void push_pv(version_t pv)
+  {
+    if (!projected.empty()) {
+      assert(projected.back() != pv);
+    }
+    projected.push_back(pv);
+  }
+
+  void pop_pv(version_t v)
+  {
+    assert(!projected.empty());
+    assert(projected.front() == v);
+    projected.pop_front();
+  }
 
   inline int get_state() const {return state;}
   void set_state(int new_state)
@@ -356,10 +375,7 @@ public:
     return projected;
   }
 
-  version_t inc_projected()
-  {
-    return ++projected;
-  }
+  version_t inc_projected();
 
   version_t get_committed()
   {
@@ -501,7 +517,20 @@ protected:
   std::set<entity_name_t> null_sessions;
   bool loaded_legacy;
 public:
-  void mark_dirty(const Session *session);
+
+  /**
+   * Mark a previously-projected session as
+   * dirty (ready for save()) within the version
+   * indicated by `version`.  This must match, in order,
+   * a previous call to mark_projected.
+   */
+  void mark_dirty(Session *session);
+
+  /**
+   * Mark a session as projected within the
+   * version indicated by `projected`
+   */
+  void mark_projected(Session *session);
 };
 
 

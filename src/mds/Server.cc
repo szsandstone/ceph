@@ -262,9 +262,10 @@ void Server::handle_client_session(MClientSession *m)
     if (session->is_closed())
       mds->sessionmap.add_session(session);
 
+    pv = mds->sessionmap.inc_projected();
     sseq = mds->sessionmap.set_state(session, Session::STATE_OPENING);
     mds->sessionmap.touch_session(session);
-    pv = mds->sessionmap.inc_projected();
+    mds->sessionmap.mark_projected(session);
     mdlog->start_submit_entry(new ESession(m->get_source_inst(), true, pv, m->client_meta),
 			      new C_MDS_session_finish(mds, session, sseq, true, pv));
     mdlog->flush();
@@ -467,6 +468,7 @@ version_t Server::prepare_force_open_sessions(map<client_t,entity_inst_t>& cm,
 	     session->is_opening() ||
 	     session->is_stale());
     session->inc_importing();
+    mds->sessionmap.mark_projected(session);
 //  mds->sessionmap.touch_session(session);
   }
   return pv;
@@ -509,16 +511,17 @@ void Server::finish_force_open_sessions(map<client_t,entity_inst_t>& cm,
 	mds->send_message_client(new MClientSession(CEPH_SESSION_OPEN), session);
 	if (mdcache->is_readonly())
 	  mds->send_message_client(new MClientSession(CEPH_SESSION_FORCE_RO), session);
-        mds->sessionmap.mark_dirty(session);
       }
     } else {
       dout(10) << "force_open_sessions skipping already-open " << session->info.inst << dendl;
       assert(session->is_open() || session->is_stale());
     }
+
     if (dec_import) {
       session->dec_importing();
-      mds->sessionmap.mark_dirty(session);
     }
+
+    mds->sessionmap.mark_dirty(session);
   }
 
   dout(10) << __func__ << ": final v " << mds->sessionmap.get_version() << dendl;
@@ -666,6 +669,7 @@ void Server::journal_close_session(Session *session, int state, Context *on_safe
   elist<MDRequestImpl*>::iterator p =
     session->requests.begin(member_offset(MDRequestImpl,
 					  item_session_request));
+  mds->sessionmap.mark_projected(session);
   while (!p.end()) {
     MDRequestRef mdr = mdcache->request_get((*p)->reqid);
     ++p;
@@ -2164,9 +2168,11 @@ CInode* Server::prepare_new_inode(MDRequestRef& mdr, CDir *dir, inodeno_t useino
   
   // assign ino
   if (mdr->session->info.prealloc_inos.size()) {
+    mds->sessionmap.inc_projected();
     mdr->used_prealloc_ino = 
       in->inode.ino = mdr->session->take_ino(useino);  // prealloc -> used
-    mds->sessionmap.inc_projected();
+    mds->sessionmap.mark_projected(mdr->session);
+
     dout(10) << "prepare_new_inode used_prealloc " << mdr->used_prealloc_ino
 	     << " (" << mdr->session->info.prealloc_inos
 	     << ", " << mdr->session->info.prealloc_inos.size() << " left)"
@@ -2189,8 +2195,9 @@ CInode* Server::prepare_new_inode(MDRequestRef& mdr, CDir *dir, inodeno_t useino
   if (got > g_conf->mds_client_prealloc_inos / 2) {
     mds->inotable->project_alloc_ids(mdr->prealloc_inos, got);
     assert(mdr->prealloc_inos.size());  // or else fix projected increment semantics
-    mdr->session->pending_prealloc_inos.insert(mdr->prealloc_inos);
     mds->sessionmap.inc_projected();
+    mdr->session->pending_prealloc_inos.insert(mdr->prealloc_inos);
+    mds->sessionmap.mark_projected(mdr->session);
     dout(10) << "prepare_new_inode prealloc " << mdr->prealloc_inos << dendl;
   }
 

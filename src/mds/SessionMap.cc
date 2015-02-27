@@ -661,10 +661,19 @@ void Session::decode(bufferlist::iterator &p)
 /**
  * Mark a session as requiring write by the current value of `version`.
  */
-void SessionMap::mark_dirty(const Session *s)
+void SessionMap::mark_dirty(Session *s)
 {
-  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name << dendl;
+  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name
+    << " v=" << version << dendl;
   dirty_sessions.insert(s->info.inst.name);
+  s->pop_pv(version);
+}
+
+void SessionMap::mark_projected(Session *s)
+{
+  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name
+    << " pv=" << projected << dendl;
+  s->push_pv(projected);
 }
 
 void SessionMap::inc_version()
@@ -691,5 +700,12 @@ void SessionMap::inc_version()
 int SessionMap::get_sessions_per_version() const
 {
   return g_conf->mds_sessionmap_keys_per_op / 2;
+}
+
+version_t SessionMap::inc_projected()
+{
+  dout(20) << __func__ << " pv " << projected
+           << " -> " << projected + 1 << dendl;
+  return ++projected;
 }
 
