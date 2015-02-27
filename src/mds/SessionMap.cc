@@ -658,14 +658,8 @@ void Session::decode(bufferlist::iterator &p)
   _update_human_name();
 }
 
-/**
- * Mark a session as requiring write by the current value of `version`.
- */
-void SessionMap::mark_dirty(Session *s)
+void SessionMap::_mark_dirty(Session *s)
 {
-  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name
-    << " v=" << version << dendl;
-
   if (dirty_sessions.size() >= g_conf->mds_sessionmap_keys_per_op) {
     // Pre-empt the usual save() call from journal segment trim, in
     // order to avoid building up an oversized OMAP update operation
@@ -673,9 +667,33 @@ void SessionMap::mark_dirty(Session *s)
     save(new C_MDSInternalNoop, version);
   }
 
-  version++;
   dirty_sessions.insert(s->info.inst.name);
+}
+
+void SessionMap::mark_dirty(Session *s)
+{
+  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name
+    << " v=" << version << dendl;
+
+  _mark_dirty(s);
+  version++;
   s->pop_pv(version);
+}
+
+void SessionMap::replay_dirty_session(Session *s)
+{
+  dout(20) << __func__ << " s=" << s << " name=" << s->info.inst.name
+    << " v=" << version << dendl;
+
+  _mark_dirty(s);
+
+  replay_advance_version();
+}
+
+void SessionMap::replay_advance_version()
+{
+  version++;
+  projected = version;
 }
 
 version_t SessionMap::mark_projected(Session *s)

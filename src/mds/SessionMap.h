@@ -344,15 +344,6 @@ public:
                        loaded_legacy(false)
   { }
 
-  /**
-   * Used during journal replay, where we want to simultaneously consume
-   * a version from the projected and saved series.
-   */
-  void inc_version_and_project()
-  {
-    projected = ++version;
-  }
-
   void set_version(const version_t v)
   {
     version = projected = v;
@@ -505,6 +496,7 @@ protected:
   std::set<entity_name_t> dirty_sessions;
   std::set<entity_name_t> null_sessions;
   bool loaded_legacy;
+  void _mark_dirty(Session *session);
 public:
 
   /**
@@ -528,6 +520,20 @@ public:
    * to mark_projected.
    */
   version_t mark_projected(Session *session);
+
+  /**
+   * During replay, advance versions to account
+   * for a session modification, and mark the
+   * session dirty.
+   */
+  void replay_dirty_session(Session *session);
+
+  /**
+   * During replay, if a session no longer present
+   * would have consumed a version, advance `version`
+   * and `projected` to account for that.
+   */
+  void replay_advance_version();
 };
 
 
