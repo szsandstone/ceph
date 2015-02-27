@@ -1525,22 +1525,20 @@ void EMetaBlob::replay(MDS *mds, LogSegment *logseg, MDSlaveUpdate *slaveup)
 	    assert(i == used_preallocated_ino);
 	    session->info.used_inos.clear();
 	  }
-	  mds->sessionmap.inc_version_and_project();
-          mds->sessionmap.mark_dirty(session);
+          mds->sessionmap.replay_dirty_session(session);
 	}
 	if (!preallocated_inos.empty()) {
 	  session->info.prealloc_inos.insert(preallocated_inos);
-	  mds->sessionmap.inc_version_and_project();
-          mds->sessionmap.mark_dirty(session);
+          mds->sessionmap.replay_dirty_session(session);
 	}
 
       } else {
 	dout(10) << "EMetaBlob.replay no session for " << client_name << dendl;
 	if (used_preallocated_ino) {
-	  mds->sessionmap.inc_version_and_project();
+	  mds->sessionmap.replay_advance_version();
         }
 	if (!preallocated_inos.empty())
-	  mds->sessionmap.inc_version_and_project();
+	  mds->sessionmap.replay_advance_version();
       }
       assert(sessionmapv == mds->sessionmap.get_version());
     } else {
@@ -1627,8 +1625,6 @@ void ESession::replay(MDS *mds)
   } else {
     dout(10) << "ESession.replay sessionmap " << mds->sessionmap.get_version()
 	     << " < " << cmapv << " " << (open ? "open":"close") << " " << client_inst << dendl;
-    mds->sessionmap.inc_version_and_project();
-    assert(mds->sessionmap.get_version() == cmapv);
     Session *session;
     if (open) {
       session = mds->sessionmap.get_or_add_session(client_inst);
@@ -1641,6 +1637,7 @@ void ESession::replay(MDS *mds)
 	if (session->connection == NULL) {
 	  dout(10) << " removed session " << session->info.inst << dendl;
 	  mds->sessionmap.remove_session(session);
+          session = NULL;
 	} else {
 	  session->clear();    // the client has reconnected; keep the Session, but reset
 	  dout(10) << " reset session " << session->info.inst << " (they reconnected)" << dendl;
@@ -1650,6 +1647,12 @@ void ESession::replay(MDS *mds)
 			  << " from time " << stamp << ", ignoring";
       }
     }
+    if (session) {
+      mds->sessionmap.replay_dirty_session(session);
+    } else {
+      mds->sessionmap.replay_advance_version();
+    }
+    assert(mds->sessionmap.get_version() == cmapv);
   }
   
   if (inos.size() && inotablev) {
