@@ -3532,7 +3532,7 @@ void CInode::decode_import(bufferlist::iterator& p,
 }
 
 
-void InodeStore::dump(Formatter *f) const
+void InodeStoreBase::dump(Formatter *f) const
 {
   inode.dump(f);
   f->dump_string("symlink", symlink);
@@ -3813,7 +3813,7 @@ void CInode::validated_data::dump(Formatter *f) const
 
 void CInode::dump(Formatter *f) const
 {
-  InodeStore::dump(f);
+  InodeStoreBase::dump(f);
 
   MDSCacheObject::dump(f);
 }
