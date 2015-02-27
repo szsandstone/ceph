@@ -345,19 +345,12 @@ public:
   { }
 
   /**
-   * Start a new version: subsequent calls to mark_dirty will associate
-   * session updates with this version until inc_version is called again.
-   */
-  void inc_version();
-  
-  /**
    * Used during journal replay, where we want to simultaneously consume
    * a version from the projected and saved series.
    */
   void inc_version_and_project()
   {
-    inc_version();
-    projected = version;
+    projected = ++version;
   }
 
   void set_version(const version_t v)
@@ -375,19 +368,15 @@ public:
     return projected;
   }
 
-  version_t inc_projected();
-
-  version_t get_committed()
+  version_t get_committed() const
   {
     return committed;
   }
 
-  version_t get_committing()
+  version_t get_committing() const
   {
     return committed;
   }
-
-  int get_sessions_per_version() const;
 
   // sessions
   void decode_legacy(bufferlist::iterator& blp);
@@ -519,18 +508,26 @@ protected:
 public:
 
   /**
-   * Mark a previously-projected session as
-   * dirty (ready for save()) within the version
-   * indicated by `version`.  This must match, in order,
-   * a previous call to mark_projected.
+   * Advance the version, and mark this session
+   * as dirty within the new version.
+   *
+   * Dirty means journalled but needing writeback
+   * to the backing store.  Must have called
+   * mark_projected previously for this session.
    */
   void mark_dirty(Session *session);
 
   /**
-   * Mark a session as projected within the
-   * version indicated by `projected`
+   * Advance the projected version, and mark this
+   * session as projected within the new version
+   *
+   * Projected means the session is updated in memory
+   * but we're waiting for the journal write of the update
+   * to finish.  Must subsequently call mark_dirty
+   * for sessions in the same global order as calls
+   * to mark_projected.
    */
-  void mark_projected(Session *session);
+  version_t mark_projected(Session *session);
 };
 
 
