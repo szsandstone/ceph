@@ -3537,7 +3537,7 @@ void InodeStore::dump(Formatter *f) const
   inode.dump(f);
   f->dump_string("symlink", symlink);
   f->open_array_section("old_inodes");
-  for (std::compact_map<snapid_t, old_inode_t>::const_iterator i = old_inodes.begin(); i != old_inodes.end(); ++i) {
+  for (compact_map<snapid_t, old_inode_t>::const_iterator i = old_inodes.begin(); i != old_inodes.end(); ++i) {
     f->open_object_section("old_inode");
     {
       // The key is the last snapid, the first is in the old_inode_t
