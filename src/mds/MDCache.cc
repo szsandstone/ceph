@@ -448,13 +448,6 @@ void MDCache::create_mydir_hierarchy(MDSGather *gather)
     stray->store_backtrace(gather->new_sub());
   }
 
-  CInode *journal = create_system_inode(MDS_INO_LOG_OFFSET + mds->whoami, S_IFREG);
-  string name = "journal";
-  CDentry *jdn = mydir->add_primary_dentry(name, journal);
-  jdn->_mark_dirty(mds->mdlog->get_current_segment());
-
-  mydir->fnode.fragstat.nfiles++;
-  mydir->fnode.rstat.rfiles++;
   mydir->fnode.accounted_fragstat = mydir->fnode.fragstat;
   mydir->fnode.accounted_rstat = mydir->fnode.rstat;
 
@@ -462,7 +455,6 @@ void MDCache::create_mydir_hierarchy(MDSGather *gather)
   myin->inode.rstat = mydir->fnode.rstat;
   ++myin->inode.rstat.rsubdirs;
   myin->inode.accounted_rstat = myin->inode.rstat;
-
 
   mydir->mark_complete();
   mydir->mark_dirty(mydir->pre_dirty(), ls);
@@ -7190,6 +7182,14 @@ bool MDCache::shutdown_pass()
     remove_subtree(mydir);
   }
   assert(subtrees.empty());
+
+  // Still replicas of mydir?
+  if (mydir->inode->is_replicated()) {
+    // We do this because otherwise acks to locks could come in after
+    // we cap the log.
+    dout(7) << "waiting for mydir replicas to release: " << *mydir << dendl;
+    return false;
+  }
 
   // (only do this once!)
   if (!mds->mdlog->is_capped()) {
